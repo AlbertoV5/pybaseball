@@ -7,8 +7,9 @@ from .league import FangraphsLeague
 from .month import FangraphsMonth
 from .pitching_data_enum import FangraphsPitchingStats
 from .positions import FangraphsPositions
+from .splits import FangraphsSplits
 
-from. fangraphs_stats_base import stat_list_to_str
+from .fangraphs_stats_base import stat_list_to_str
 
 FangraphsStatColumn = Union[FangraphsBattingStats, FangraphsFieldingStats, FangraphsPitchingStats]
 

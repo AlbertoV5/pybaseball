@@ -8,10 +8,11 @@ from .. import cache
 from ..datahelpers.column_mapper import BattingStatsColumnMapper, ColumnListMapperFunction, GenericColumnMapper
 from ..enums.fangraphs import (FangraphsBattingStats, FangraphsFieldingStats, FangraphsLeague, FangraphsMonth,
                                FangraphsPitchingStats, FangraphsPositions, FangraphsStatColumn, FangraphsStatsCategory,
-                               stat_list_from_str, stat_list_to_str)
+                               FangraphsSplits, stat_list_from_str, stat_list_to_str)
 from .html_table_processor import HTMLTableProcessor, RowIdFunction
 
 _FG_LEADERS_URL = "/leaders-legacy.aspx"
+_FG_SPLITS_URL = "/leaders/splits-leaderboards"
 
 MIN_AGE = 0
 MAX_AGE = 100
@@ -163,6 +164,124 @@ class FangraphsDataTable(ABC):
             )
         )
 
+class FangraphsSplitsTable(FangraphsDataTable):
+    """
+    Table for Fangraphs splits leaderboards (e.g., vs LHH, vs RHH, as RHP, as LHP).
+    """
+    QUERY_ENDPOINT: str = _FG_SPLITS_URL
+    
+    def fetch(self, start_season: int, end_season: Optional[int] = None, league: str = 'ALL', 
+              stat_columns: Union[str, List[str]] = 'ALL', qual: Optional[int] = None, split_seasons: bool = True,
+              month: str = 'ALL', on_active_roster: bool = False, minimum_age: int = MIN_AGE,
+              maximum_age: int = MAX_AGE, team: str = '', _filter: str = '', players: str = '',
+              position: str = 'ALL', max_results: int = 1000000, splits: Union[str, List, int] = None,
+              auto_pt: bool = True, split_teams: bool = False, group_by: str = 'season') -> pd.DataFrame:
+
+        """
+        Get splits leaderboard data from Fangraphs.
+
+        ARGUMENTS:
+        start_season       : int              : First season to return data for
+        end_season         : int              : Last season to return data for
+                                                Default = start_season
+        league             : str              : League to return data for: ALL, AL, FL, NL
+                                                Default = ALL
+        stat_columns       : str or List[str] : The columns of data to return
+                                                Default = ALL
+        qual               : Optional[int]    : Minimum number of plate appearances to be included.
+                                                If None is specified, the Fangraphs default ('y') is used.
+                                                Default = None
+        split_seasons      : bool             : True if you want individual season-level data
+                                                False if you want aggregate data over all seasons.
+                                                Default = True
+        month              : str              : Month to filter data by. 'ALL' to not filter by month.
+                                                Default = 'ALL'
+        on_active_roster   : bool             : Only include active roster players.
+                                                Default = False
+        minimum_age        : int              : Minimum player age.
+                                                Default = 0
+        maximum_age        : int              : Maximum player age.
+                                                Default = 100
+        team               : str              : Team to filter data by.
+        position           : str              : Position to filter data by.
+                                                Default = ALL
+        max_results        : int              : The maximum number of results to return.
+                                                Default = 1000000 (In effect, all results)
+        splits             : Union[str, List, int] : The splits to apply. Can be:
+                                                - Single split as int or string: 5, 'VS_LHH'
+                                                - List of splits: [5, 96], ['VS_LHH', 'AS_RHP']
+                                                - Comma-separated string: '5,96'
+                                                Default = None (no splits applied)
+        auto_pt            : bool             : Enable auto pitcher/team selection.
+                                                Default = True
+        split_teams        : bool             : Whether to split by teams.
+                                                Default = False
+        group_by           : str              : How to group results ('season', etc.).
+                                                Default = 'season'
+        """
+
+        stat_columns_enums = stat_list_from_str(self.STATS_CATEGORY, stat_columns)
+
+        if start_season is None:
+            raise ValueError(
+                "You need to provide at least one season to collect data for. " +
+                "Try specifying start_season or start_season and end_season."
+            )
+
+        if end_season is None:
+            end_season = start_season
+
+        assert self.STATS_CATEGORY is not None
+
+        if league is None:
+            raise ValueError("parameter 'league' cannot be None.")
+
+        # Format the splits parameter
+        split_arr = ''
+        if splits is not None:
+            split_arr = FangraphsSplits.format_split_array(splits)
+
+        # Convert seasons to date format for splits endpoint
+        start_date = f"{start_season}-03-01"
+        end_date = f"{end_season}-11-01"
+
+        # Map stat categories to numeric values for splits endpoint
+        stat_group_map = {
+            FangraphsStatsCategory.BATTING: '1',
+            FangraphsStatsCategory.PITCHING: '2',
+            FangraphsStatsCategory.FIELDING: '3',
+        }
+
+        url_options = {
+            'splitArr': split_arr,
+            'splitArrPitch': '',  # For pitch type splits (not implemented yet)
+            'autoPt': str(auto_pt).lower(),
+            'splitTeams': str(split_teams).lower(),
+            'statType': 'player',
+            'statgroup': stat_group_map.get(self.STATS_CATEGORY, '1'),
+            'startDate': start_date,
+            'endDate': end_date,
+            'players': players,
+            'filter': _filter,
+            'groupBy': group_by,
+            'position': FangraphsPositions.parse(position).value,
+            'sort': '22,1',  # Default sort
+        }
+
+        return self._validate(
+            self._postprocess(
+                self.html_accessor.get_tabular_data_from_options(
+                    self.QUERY_ENDPOINT,
+                    query_params=url_options,
+                    # TODO: Remove the type: ignore after this is fixed: https://github.com/python/mypy/issues/5485
+                    column_name_mapper=self.COLUMN_NAME_MAPPER, # type: ignore
+                    known_percentages=self.KNOWN_PERCENTAGES,
+                    row_id_func=self.ROW_ID_FUNC,
+                    row_id_name=self.ROW_ID_NAME,
+                )
+            )
+        )
+
 class FangraphsBattingStatsTable(FangraphsDataTable):
     STATS_CATEGORY: FangraphsStatsCategory = FangraphsStatsCategory.BATTING
     DEFAULT_STAT_COLUMNS: List[FangraphsStatColumn] = FangraphsBattingStats.ALL()
@@ -210,6 +329,39 @@ class FangraphsPitchingStatsTable(FangraphsDataTable):
             data = data.reindex(columns=columns)
         return self._sort(data, ["WAR", "W"], ascending=False)
 
+class FangraphsSplitsBattingTable(FangraphsSplitsTable):
+    STATS_CATEGORY: FangraphsStatsCategory = FangraphsStatsCategory.BATTING
+    DEFAULT_STAT_COLUMNS: List[FangraphsStatColumn] = FangraphsBattingStats.ALL()
+    COLUMN_NAME_MAPPER: ColumnListMapperFunction = BattingStatsColumnMapper().map_list
+    KNOWN_PERCENTAGES: List[str] = ["GB/FB"]
+    ROW_ID_FUNC: RowIdFunction = player_row_id_func
+    ROW_ID_NAME = 'IDfg'
+
+    @cache.df_cache()
+    def fetch(self, *args, **kwargs):
+        return super().fetch(*args, **kwargs)
+
+    def _postprocess(self, data: pd.DataFrame) -> pd.DataFrame:
+        return self._sort(data, ["WAR", "OPS"], ascending=False)
+
+class FangraphsSplitsPitchingTable(FangraphsSplitsTable):
+    STATS_CATEGORY: FangraphsStatsCategory = FangraphsStatsCategory.PITCHING
+    DEFAULT_STAT_COLUMNS: List[FangraphsStatColumn] = FangraphsPitchingStats.ALL()
+    ROW_ID_FUNC: RowIdFunction = player_row_id_func
+    ROW_ID_NAME = 'IDfg'
+
+    @cache.df_cache()
+    def fetch(self, *args, **kwargs):
+        return super().fetch(*args, **kwargs)
+
+    def _postprocess(self, data: pd.DataFrame) -> pd.DataFrame:
+        if "WAR" in data.columns:
+            new_position = min(7, len(data.columns) - 1)
+            columns = data.columns.tolist()
+            columns.insert(new_position, columns.pop(columns.index("WAR")))
+            data = data.reindex(columns=columns)
+        return self._sort(data, ["WAR", "W"], ascending=False)
+
 class FangraphsTeamBattingDataTable(FangraphsDataTable):
     STATS_CATEGORY: FangraphsStatsCategory = FangraphsStatsCategory.BATTING
     DEFAULT_STAT_COLUMNS: List[FangraphsStatColumn] = FangraphsBattingStats.ALL()
@@ -238,3 +390,7 @@ fg_pitching_data = FangraphsPitchingStatsTable().fetch
 fg_team_batting_data = FangraphsTeamBattingDataTable().fetch
 fg_team_fielding_data = FangraphsTeamFieldingDataTable().fetch
 fg_team_pitching_data = FangraphsTeamPitchingDataTable().fetch
+
+# New splits functions
+fg_batting_splits = FangraphsSplitsBattingTable().fetch
+fg_pitching_splits = FangraphsSplitsPitchingTable().fetch

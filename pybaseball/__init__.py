@@ -99,6 +99,6 @@ from .plotting import spraychart
 from .plotting import plot_teams
 from .plotting import plot_strike_zone
 from .datasources.fangraphs import (fg_batting_data, fg_pitching_data, fg_team_batting_data, fg_team_fielding_data,
-                                    fg_team_pitching_data)
+                                    fg_team_pitching_data, fg_batting_splits, fg_pitching_splits)
 from .split_stats import get_splits
 from .version import __version__
