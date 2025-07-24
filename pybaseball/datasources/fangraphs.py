@@ -167,8 +167,9 @@ class FangraphsDataTable(ABC):
 class FangraphsSplitsTable(FangraphsDataTable):
     """
     Table for Fangraphs splits leaderboards (e.g., vs LHH, vs RHH, as RHP, as LHP).
+    Uses the legacy endpoint which properly supports splits parameters.
     """
-    QUERY_ENDPOINT: str = _FG_SPLITS_URL
+    QUERY_ENDPOINT: str = _FG_LEADERS_URL  # Use legacy endpoint instead of splits endpoint
     
     def fetch(self, start_season: int, end_season: Optional[int] = None, league: str = 'ALL', 
               stat_columns: Union[str, List[str]] = 'ALL', qual: Optional[int] = None, split_seasons: bool = True,
@@ -213,11 +214,11 @@ class FangraphsSplitsTable(FangraphsDataTable):
                                                 - Comma-separated string: '5,96'
                                                 Default = None (no splits applied)
         auto_pt            : bool             : Enable auto pitcher/team selection.
-                                                Default = True
+                                                Default = True (ignored for legacy endpoint)
         split_teams        : bool             : Whether to split by teams.
-                                                Default = False
+                                                Default = False (ignored for legacy endpoint)
         group_by           : str              : How to group results ('season', etc.).
-                                                Default = 'season'
+                                                Default = 'season' (ignored for legacy endpoint)
         """
 
         stat_columns_enums = stat_list_from_str(self.STATS_CATEGORY, stat_columns)
@@ -236,37 +237,52 @@ class FangraphsSplitsTable(FangraphsDataTable):
         if league is None:
             raise ValueError("parameter 'league' cannot be None.")
 
-        # Format the splits parameter
-        split_arr = ''
+        # Format the splits parameter for legacy endpoint
+        split_param = None
         if splits is not None:
-            split_arr = FangraphsSplits.format_split_array(splits)
+            if isinstance(splits, (list, tuple)):
+                # For multiple splits, use the first one (legacy endpoint limitation)
+                # TODO: Consider if we need to handle multiple splits differently
+                if len(splits) > 0:
+                    first_split = splits[0]
+                    if isinstance(first_split, FangraphsSplits):
+                        split_param = str(first_split.value)
+                    elif isinstance(first_split, (int, str)):
+                        split_param = str(first_split)
+            elif isinstance(splits, str):
+                if ',' in splits:
+                    # Take the first split from comma-separated string
+                    split_param = splits.split(',')[0].strip()
+                else:
+                    split_param = splits
+            elif isinstance(splits, (int, FangraphsSplits)):
+                if isinstance(splits, FangraphsSplits):
+                    split_param = str(splits.value)
+                else:
+                    split_param = str(splits)
 
-        # Convert seasons to date format for splits endpoint
-        start_date = f"{start_season}-03-01"
-        end_date = f"{end_season}-11-01"
-
-        # Map stat categories to numeric values for splits endpoint
-        stat_group_map = {
-            FangraphsStatsCategory.BATTING: '1',
-            FangraphsStatsCategory.PITCHING: '2',
-            FangraphsStatsCategory.FIELDING: '3',
-        }
-
+        # Use the same parameter format as regular tables, with split parameter added
         url_options = {
-            'splitArr': split_arr,
-            'splitArrPitch': '',  # For pitch type splits (not implemented yet)
-            'autoPt': str(auto_pt).lower(),
-            'splitTeams': str(split_teams).lower(),
-            'statType': 'player',
-            'statgroup': stat_group_map.get(self.STATS_CATEGORY, '1'),
-            'startDate': start_date,
-            'endDate': end_date,
-            'players': players,
+            'pos': FangraphsPositions.parse(position).value,
+            'stats': self.STATS_CATEGORY.value,
+            'lg': FangraphsLeague.parse(league.upper()).value,
+            'qual': qual if qual is not None else 'y',
+            'type': stat_list_to_str(stat_columns_enums),
+            'season': end_season,
+            'month': FangraphsMonth.parse(month).value,
+            'season1': start_season,
+            'ind': int(split_seasons),
+            'team': f'{team or 0},ts' if self.TEAM_DATA else team,
+            'rost': int(on_active_roster),
+            'age': f"{minimum_age},{maximum_age}",
             'filter': _filter,
-            'groupBy': group_by,
-            'position': FangraphsPositions.parse(position).value,
-            'sort': '22,1',  # Default sort
+            'players': players,
+            'page': f'1_{max_results}'
         }
+
+        # Add split parameter if specified
+        if split_param is not None:
+            url_options['split'] = split_param
 
         return self._validate(
             self._postprocess(
