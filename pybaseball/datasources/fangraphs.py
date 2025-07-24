@@ -1,5 +1,6 @@
 from abc import ABC
 from typing import Any, List, Optional, Union
+from urllib.parse import urlencode
 
 import lxml
 import pandas as pd
@@ -93,7 +94,9 @@ class FangraphsDataTable(ABC):
                                                 1 if you want individual season-level data
                                                 0 if you want a player's aggreagate data over all seasons in the query
         stat_columns       : str or List[str] : The columns of data to return
-                                                Default = ALL
+                                                Default = ALL (Note: 'ALL' is automatically converted to 'COMMON' 
+                                                for splits to prevent URL length errors. Use a specific list of 
+                                                stats if you need more than the common stats.)
         qual               : Optional[int]    : Minimum number of plate appearances to be included.
                                                 If None is specified, the Fangraphs default ('y') is used.
                                                 Default = None
@@ -221,6 +224,10 @@ class FangraphsSplitsTable(FangraphsDataTable):
                                                 Default = 'season' (ignored for legacy endpoint)
         """
 
+        # For splits, use COMMON stats if ALL is requested to prevent 413 errors from large URLs
+        if stat_columns == 'ALL':
+            stat_columns = 'COMMON'
+        
         stat_columns_enums = stat_list_from_str(self.STATS_CATEGORY, stat_columns)
 
         if start_season is None:
@@ -283,6 +290,9 @@ class FangraphsSplitsTable(FangraphsDataTable):
         # Add split parameter if specified
         if split_param is not None:
             url_options['split'] = split_param
+
+        # Print complete url with 
+        print(f"URL: {self.ROOT_URL}{self.QUERY_ENDPOINT}?{urlencode(url_options)}")
 
         return self._validate(
             self._postprocess(
